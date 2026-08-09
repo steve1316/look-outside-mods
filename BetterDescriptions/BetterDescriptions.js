@@ -396,4 +396,187 @@ var BetterDescriptions = BetterDescriptions || {};
         win.resetFontSettings();
     }
 
+    // //////////////////////////////////////////////////////////////////////////////////////////////////
+    // //////////////////////////////////////////////////////////////////////////////////////////////////
+    // Derive
+
+    var STATE_TIERS = /\s*\d+$/;
+    // How many statuses a resist group names before it falls back to counting the remainder.
+    var RESISTS_NAMED = 3;
+    // Used when the class table cannot be read, so a sentinel formula still does not reach the player as a figure.
+    var MAX_HP_FALLBACK = 9999;
+    var maxHpCeiling = null;
+    // Note-tag patterns, cached by tag name. See `noteNumber`.
+    var notePatterns = {};
+    // Glitch-world gear, whose names and descriptions the developers deliberately corrupted ("Vnage ucky tieakeRs",
+    // "pr#tcts f1rom#M sT#a4ts##u#sEf#?fct7"). A clean mechanical readout would undo the effect they were going for,
+    // so these are skipped outright. There is no property in the data marking them, hence the list of ids.
+    var GLITCH_ARMORS = { 225: true, 226: true, 227: true, 228: true, 374: true, 375: true, 376: true };
+    // Names for the flat params a code-21 trait multiplies, indexed by trait dataId.
+    var PARAM_NAMES = ["max HP", "max STM", "attack", "defense", "ballistics", "ballistic defense", "agility", "luck"];
+    // Names for the sp-params a code-23 trait multiplies, indexed by trait dataId.
+    var SPARAM_TEXT = { 0: "chance to be targeted", 2: "healing received", 4: "STM costs", 6: "incoming physical damage", 7: "incoming ballistic damage", 9: "EXP gain" };
+    // Scopes that point at the player's side. A state applied here is never an affliction.
+    var ALLY_SCOPES = { 7: 1, 8: 1, 9: 1, 10: 1, 11: 1, 12: 1, 13: 1 };
+    var SCOPE_TEXT = {
+        1: "one enemy", 2: "all enemies", 3: "1 random enemy", 4: "2 random enemies", 5: "3 random enemies", 6: "4 random enemies",
+        7: "one ally", 8: "all allies", 9: "one downed ally", 10: "all downed allies", 11: "the user", 12: "one ally", 13: "all allies", 14: "everyone"
+    };
+    // RPG Maker damage types. This game shows MP as STM. Drains take "from", everything else "to".
+    // `kind` is the single place the six type codes are grouped, so nothing has to re-test the numbers.
+    var DAMAGE_TEXT = {
+        1: { verb: "Deals", unit: "damage", prep: "to", kind: "damage" },
+        2: { verb: "Deals", unit: "STM damage", prep: "to", kind: "damage" },
+        3: { verb: "Restores", unit: "HP", prep: "to", kind: "restore" },
+        4: { verb: "Restores", unit: "STM", prep: "to", kind: "restore" },
+        5: { verb: "Drains", unit: "HP", prep: "from", kind: "drain" },
+        6: { verb: "Drains", unit: "STM", prep: "from", kind: "drain" }
+    };
+
+    /**
+     * Escapes a string for safe use inside a regular expression.
+     * @param {string} text Text that may contain regex metacharacters.
+     * @returns {string} The text with metacharacters escaped.
+     */
+    function escapeForRegex(text) {
+        return String(text).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    }
+
+    /**
+     * Looks up an element's name. Lowercase is not cosmetic: `colourise` only tints a lowercase element word,
+     * so that a capitalised one inside an item name like "Pistol Bullet" is left alone.
+     * @param {number} id Element id, from `damage.elementId` or a trait's `dataId`.
+     * @returns {string} Lowercased element name, or an empty string when the element does not exist.
+     */
+    function elementName(id) {
+        if (typeof $dataSystem === "undefined" || !$dataSystem.elements) return "";
+        return ($dataSystem.elements[id] || "").toLowerCase();
+    }
+
+    /**
+     * Renders a trait multiplier as a signed percentage away from unchanged, so 1.5 reads "+50%" and 0.5 "-50%".
+     * @param {number} value The trait's multiplier, where 1 means no change.
+     * @returns {string} A signed percentage.
+     */
+    function signedPercent(value) {
+        return (value > 1 ? "+" : "-") + Math.round(Math.abs(value - 1) * 100) + "%";
+    }
+
+    /**
+     * Renders how long a state lasts. Equal bounds are a fixed duration rather than a range, because "1-1 turns"
+     * is not English, and one turn takes the singular noun.
+     * @param {object} state A state record, or null.
+     * @param {string} open Text placed before the figure, such as `" ("` or `" for "`.
+     * @param {string} close Text placed after it, such as `")"` or an empty string.
+     * @returns {string} The wrapped duration, or an empty string when the state never expires on its own.
+     */
+    function turnRange(state, open, close) {
+        if (!state || !state.maxTurns) return "";
+        var span = state.minTurns === state.maxTurns
+            ? state.minTurns + (state.minTurns === 1 ? " turn" : " turns")
+            : state.minTurns + "-" + state.maxTurns + " turns";
+        return open + span + close;
+    }
+
+    /**
+     * Reads the fixed damage a formula states outright.
+     * A leading constant only describes the real damage when nothing is ADDED to it, so a formula with an
+     * added actor term, game-state call or target term is reported as having no stated amount rather than
+     * as its floor. A subtracted term only mitigates, so the constant survives as a legitimate ceiling.
+     * @param {string} formula The `damage.formula` expression.
+     * @returns {string} The leading constant, or an empty string when there is none or it would mislead.
+     */
+    function formulaBase(formula) {
+        var text = String(formula).trim();
+        var m = text.match(/^(\d+)/);
+        if (!m || m[1] === "0") return "";
+        var rest = text.slice(m[1].length).trim();
+        // A number glued to * or / is a coefficient, not a base amount.
+        if (/^[*\/]/.test(rest)) return "";
+        var terms = rest.split(/(?=[+-])/);
+        for (var i = 0; i < terms.length; i++) {
+            var term = terms[i].trim();
+            if (term.charAt(0) === "+" && /[a-zA-Z]/.test(term)) return "";
+        }
+        return m[1];
+    }
+
+    /**
+     * Reports the highest max HP the game's own class curves ever reach. A restore formula at or above that
+     * is an engine full-heal sentinel, not a figure, and printing "Restores 99999 HP" states a number the
+     * player can never see. Computed once from the class table and cached.
+     * @returns {number} The highest max HP any class attains, or `MAX_HP_FALLBACK` when the table is unreadable.
+     */
+    function maxHpScale() {
+        if (maxHpCeiling !== null) return maxHpCeiling;
+        maxHpCeiling = 0;
+        if (typeof $dataClasses !== "undefined") {
+            for (var i = 0; i < $dataClasses.length; i++) {
+                var curve = $dataClasses[i] && $dataClasses[i].params ? $dataClasses[i].params[0] : null;
+                if (!curve) continue;
+                for (var l = 0; l < curve.length; l++) if (curve[l] > maxHpCeiling) maxHpCeiling = curve[l];
+            }
+        }
+        if (!maxHpCeiling) maxHpCeiling = MAX_HP_FALLBACK;
+        return maxHpCeiling;
+    }
+
+    /**
+     * Reports whether a record carries an HP or STM recovery effect, which speaks for itself in `deriveRecovery`.
+     * @param {object} record An item or skill record.
+     * @returns {boolean} True when a recovery effect will fire.
+     */
+    function hasRecoveryEffect(record) {
+        var effects = record.effects || [];
+        for (var i = 0; i < effects.length; i++) if (effects[i].code === 11 || effects[i].code === 12) return true;
+        return false;
+    }
+
+    /**
+     * Collects the skills a player can actually reach, through class learning or an equipment trait.
+     * @returns {object} Map of skill id to true.
+     */
+    function playerSkillIds() {
+        var ids = {};
+        var i;
+        if (typeof $dataClasses !== "undefined") {
+            for (i = 0; i < $dataClasses.length; i++) {
+                var cls = $dataClasses[i];
+                if (!cls || !cls.learnings) continue;
+                for (var j = 0; j < cls.learnings.length; j++) ids[cls.learnings[j].skillId] = true;
+            }
+        }
+        var sources = [];
+        if (typeof $dataArmors !== "undefined") sources = sources.concat($dataArmors);
+        if (typeof $dataWeapons !== "undefined") sources = sources.concat($dataWeapons);
+        if (typeof $dataActors !== "undefined") sources = sources.concat($dataActors);
+        for (i = 0; i < sources.length; i++) {
+            var src = sources[i];
+            if (!src || !src.traits) continue;
+            for (var t = 0; t < src.traits.length; t++) if (src.traits[t].code === 43) ids[src.traits[t].dataId] = true;
+        }
+        return ids;
+    }
+
+    /**
+     * Looks up a state's display name.
+     * @param {number} id State id.
+     * @returns {string} Lowercased state name, or an empty string when the state does not exist.
+     */
+    function stateName(id) {
+        if (typeof $dataStates === "undefined" || !$dataStates[id] || !$dataStates[id].name) return "";
+        return $dataStates[id].name.toLowerCase();
+    }
+
+    /**
+     * Looks up a state's family name, with any tier digit stripped. `Bleed1`, `Bleed2` and `Bleed3` are one
+     * status at three tiers, so listing them separately triples the entry and tints the tier digit as if it
+     * were a figure the player could act on.
+     * @param {number} id State id.
+     * @returns {string} Lowercased family name, or an empty string when the state does not exist.
+     */
+    function stateFamily(id) {
+        return stateName(id).replace(STATE_TIERS, "").trim();
+    }
+
 })();
