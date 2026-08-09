@@ -24,4 +24,25 @@ group("Task 1 - skeleton and config");
     check("string '8' also reads as number 8", h.BD.config.toggleButton === 8);
 }
 
+group("Task 2 - toggle core");
+{
+    const h = loadMod();
+    const item = h.sandbox.$dataItems[93];
+    const vanilla = h.pristine.items[93].description;
+    h.BD.register(item, vanilla, "TEST ENHANCED");
+    h.BD.setEnhanced(true);
+    check("enhanced view writes the enhanced text", item.description === "TEST ENHANCED", item.description);
+    h.BD.setEnhanced(false);
+    check("original view restores the devs' text byte for byte", item.description === vanilla, JSON.stringify(item.description));
+    check("isEnhanced reflects the view", h.BD.isEnhanced() === false);
+
+    h.sandbox.ConfigManager.betterDescriptions = true;
+    check("ConfigManager setter switches the view", item.description === "TEST ENHANCED");
+    check("makeData persists the flag", h.sandbox.ConfigManager.makeData().betterDescriptions === true);
+    h.sandbox.ConfigManager.applyData({ betterDescriptions: false });
+    check("applyData restores the saved view", item.description === vanilla);
+    h.sandbox.ConfigManager.applyData({});
+    check("a missing flag defaults to enhanced", item.description === "TEST ENHANCED");
+}
+
 done();
