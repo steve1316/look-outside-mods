@@ -997,6 +997,104 @@ var BetterDescriptions = BetterDescriptions || {};
     var skipLog = [];
     var applied = false;
 
+    /**
+     * Appends a derived fact to a list, ignoring empty results so callers need no null checks.
+     * @param {string[]} parts Accumulating fact list.
+     * @param {string|null} fact A derived sentence, or null when the deriver had nothing to say.
+     */
+    function push(parts, fact) {
+        if (fact) parts.push(fact);
+    }
+
+    /**
+     * Builds a record's mechanical view from every fact the catalogue can read off it.
+     * The developers' description is never consulted, so there is nothing to damage and no boundary to find.
+     * @param {object} record A database record.
+     * @param {string} kind One of `"item"`, `"skill"`, `"armor"` or `"weapon"`.
+     * @param {number} id The record's index in its database, used to look up curated facts.
+     * @returns {string|null} A colourised mechanical description, or null when nothing is derivable.
+     */
+    function buildMechanical(record, kind, id) {
+        var parts = [];
+        if (kind === "armor" || kind === "weapon") {
+            push(parts, deriveEquipment(record));
+        } else {
+            push(parts, deriveDamage(record));
+            push(parts, deriveRecovery(record));
+            push(parts, deriveSkill(record));
+            push(parts, deriveStatesRemoved(record));
+            push(parts, deriveCosts(record));
+            push(parts, deriveDurability(record));
+            push(parts, deriveSelfState(record));
+        }
+        push(parts, curatedFact(record, kind, id));
+        if (!parts.length) return null;
+        return colourise(parts.join(" "));
+    }
+
+    /**
+     * Gives a record its mechanical view, or records it as bare when nothing can be derived.
+     * @param {object} record A database record.
+     * @param {string} kind One of `"item"`, `"skill"`, `"armor"` or `"weapon"`.
+     * @param {number} id The record's index in its database.
+     */
+    function cover(record, kind, id) {
+        if (!record || typeof record.description !== "string") return;
+        var mechanical = buildMechanical(record, kind, id);
+        if (!mechanical) { stats.bare++; return; }
+        register(record, record.description, mechanical);
+        stats.covered++;
+    }
+
+    /** Walks every covered database once, builds each record's mechanical view, then reports the outcome. */
+    function applyAll() {
+        var i;
+        if (typeof $dataItems !== "undefined") {
+            for (i = 0; i < $dataItems.length; i++) {
+                if ($dataItems[i] && $dataItems[i].itypeId === 1) cover($dataItems[i], "item", i);
+            }
+        }
+        if (typeof $dataSkills !== "undefined") {
+            var player = playerSkillIds();
+            for (i = 0; i < $dataSkills.length; i++) {
+                if (player[i]) cover($dataSkills[i], "skill", i);
+            }
+        }
+        if (typeof $dataArmors !== "undefined") {
+            for (i = 0; i < $dataArmors.length; i++) {
+                if ($dataArmors[i] && !GLITCH_ARMORS[i]) cover($dataArmors[i], "armor", i);
+            }
+        }
+        if (typeof $dataWeapons !== "undefined") {
+            for (i = 0; i < $dataWeapons.length; i++) {
+                if ($dataWeapons[i]) cover($dataWeapons[i], "weapon", i);
+            }
+        }
+        setEnhanced(showEnhanced);
+        report();
+    }
+
+    if (typeof DataManager !== "undefined") {
+        var _isDatabaseLoaded = DataManager.isDatabaseLoaded;
+        /**
+         * Reports whether the database has finished loading, building every mechanical view exactly once along the way.
+         * @returns {boolean} True once the vanilla database is loaded.
+         */
+        DataManager.isDatabaseLoaded = function() {
+            if (!_isDatabaseLoaded.call(this)) return false;
+            // Scene_Boot polls this every frame. Covering twice would register every record a second time.
+            if (applied) return true;
+            applied = true;
+            applyAll();
+            return true;
+        };
+    }
+
+    BetterDescriptions.stats = stats;
+    BetterDescriptions.skipLog = skipLog;
+    BetterDescriptions.buildMechanical = buildMechanical;
+    BetterDescriptions.applyAll = applyAll;
+
     // //////////////////////////////////////////////////////////////////////////////////////////////////
     // //////////////////////////////////////////////////////////////////////////////////////////////////
     // Curated

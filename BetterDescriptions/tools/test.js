@@ -113,6 +113,62 @@ group("Task 4 - help box");
     check("first page holds the first two lines", pages[0].join("|") === "a|b");
 }
 
+group("Mechanical view - core contract");
+{
+    const h = loadMod();
+    h.boot();
+    const I = h.sandbox.$dataItems, S = h.sandbox.$dataSkills;
+
+    check("records with mechanics got a view", h.BD.stats.covered > 900, JSON.stringify(h.BD.stats));
+
+    // A skip means the mod was about to state a hand-written fact the shipped data no longer backs up.
+    check("nothing skipped against shipped data", h.BD.stats.skipped === 0, JSON.stringify(h.BD.skipLog));
+
+    // THE invariant: the developers' text is never modified.
+    h.BD.setEnhanced(false);
+    const freshI = h.db("Items"), freshS = h.db("Skills"), freshA = h.db("Armors"), freshW = h.db("Weapons");
+    let drift = 0;
+    freshI.forEach((r, i) => { if (r && I[i].description !== r.description) drift++; });
+    freshS.forEach((r, i) => { if (r && S[i].description !== r.description) drift++; });
+    freshA.forEach((r, i) => { if (r && h.sandbox.$dataArmors[i].description !== r.description) drift++; });
+    freshW.forEach((r, i) => { if (r && h.sandbox.$dataWeapons[i].description !== r.description) drift++; });
+    check("original view is byte-identical to data/*.json", drift === 0, drift + " records drifted");
+
+    h.BD.setEnhanced(true);
+    const cheez = I[21];
+    check("mechanical view replaces the whole description", cheez.description.indexOf("corn-cheese") === -1, JSON.stringify(cheez.description));
+    check("mechanical view states the recovery", /16/.test(cheez.description) && /3%/.test(cheez.description), JSON.stringify(cheez.description));
+
+    // Healing Spray was refused by the old design because flavour and mechanics shared a sentence.
+    // Its recovery is effect code 11, which the reduced Task 1 deriver set already reads.
+    check("a record the old design refused now has a view", I[2].description !== h.pristine.items[2].description, JSON.stringify(I[2].description));
+
+    // A record with no derivable mechanic must have no view at all.
+    check("a flavour-only record is left bare", I[5].description === h.pristine.items[5].description, JSON.stringify(I[5].description));
+
+    h.BD.setEnhanced(false);
+    check("toggling back restores the devs' text exactly", I[21].description === h.pristine.items[21].description, JSON.stringify(I[21].description));
+
+    // `buildMechanical` is exported so later tasks can call it on a record directly. The curated guard must
+    // judge the record it is handed, not re-read a live database the mod has since written its own view into.
+    h.BD.setEnhanced(true);
+    const standalone = h.BD.buildMechanical(h.pristine.skills[142], "skill", 142);
+    h.BD.buildMechanical(h.pristine.skills[142], "skill", 142);
+    check("a standalone call after boot fabricates no skip", h.BD.stats.skipped === 0 && h.BD.skipLog.length === 0, JSON.stringify(h.BD.skipLog));
+    check("and still returns the curated fact", /55%/.test(String(standalone)), JSON.stringify(standalone));
+
+    const entriesBefore = h.BD.entries.length, coveredBefore = h.BD.stats.covered;
+    h.boot();
+    check("a second database-load pass changes nothing", h.BD.entries.length === entriesBefore && h.BD.stats.covered === coveredBefore, JSON.stringify(h.BD.stats));
+
+    let reported = "";
+    const realLog = console.log;
+    console.log = (line) => { reported += String(line); };
+    let threw = false;
+    try { h.BD.report(); } catch (err) { threw = true; } finally { console.log = realLog; }
+    check("report() runs without throwing and logs the tally", !threw && /covered \d+/.test(reported), JSON.stringify(reported));
+}
+
 group("Mechanical view - 18pt rendering");
 {
     const h = loadMod();
@@ -299,6 +355,106 @@ group("Mechanical view - equipment stats and grants");
     const necklace = h.BD.colourise(h.BD.deriveEquipment(h.pristine.armors[100]));
     check("an sp-param phrase does not collide with a status name", necklace.indexOf("[10]taken") === -1, JSON.stringify(necklace));
     check("and the sp-param change is still stated", /25%/.test(necklace) && /physical damage/.test(necklace), JSON.stringify(necklace));
+}
+
+group("Mechanical view - whole corpus");
+{
+    const h = loadMod();
+    h.boot();
+
+    check("coverage is substantial", h.BD.stats.covered > 900, JSON.stringify(h.BD.stats));
+
+    // The glitch-world gear is skipped by an id list, since nothing in the data marks it. Assert the list
+    // still bites, so it cannot quietly go stale and start handing these records a clean mechanical readout.
+    const glitchIds = [225, 226, 227, 228, 374, 375, 376];
+    const glitchTouched = glitchIds.filter((id) => h.sandbox.$dataArmors[id].description !== h.pristine.armors[id].description);
+    check("deliberately corrupted gear is left alone", glitchTouched.length === 0, "touched: " + glitchTouched.join(", "));
+
+    // No mechanical view may contain a run of the developers' prose. Every contiguous four-word window of the
+    // vanilla text is tried, because a window assembled from words that are not adjacent in the source does
+    // not exist in the source either, and so could never be found in the mechanical view.
+    // These four windows are stock deriver phrasing that some vanilla sentences happen to use the same words
+    // for. The mod generated them from `damage`, `traits` and `effects` without reading the description, so
+    // they are coincidence rather than leakage. Every other match is a defect.
+    const COINCIDENCE = ["damage to all enemies.", "chance to be targeted", "to act twice per", "act twice per turn."];
+    let leaked = [];
+    h.BD.entries.forEach((e) => {
+        const words = String(e.vanilla).replace(/\\C\[\d+\]/g, "").split(/\s+/).filter(Boolean);
+        for (let i = 0; i + 4 <= words.length; i++) {
+            const run = words.slice(i, i + 4).join(" ");
+            if (run.length <= 12 || COINCIDENCE.indexOf(run) !== -1) continue;
+            if (e.enhanced.indexOf(run) !== -1) { leaked.push(e.target.name + ": " + run); break; }
+        }
+    });
+    check("no developer prose leaked into a mechanical view", leaked.length === 0, leaked.slice(0, 5).join(", "));
+
+    // Nothing empty, nothing absurd.
+    let empty = 0, huge = 0;
+    h.BD.entries.forEach((e) => {
+        const plainText = e.enhanced.replace(/\\C\[\d+\]/g, "");
+        if (!plainText.trim()) empty++;
+        if (plainText.length > 400) huge++;
+    });
+    check("no mechanical view is empty", empty === 0, empty + " empty");
+    check("no mechanical view is absurdly long", huge === 0, huge + " over 400 chars");
+
+    // Colour spans must survive wrapping intact.
+    let unbalanced = 0;
+    h.BD.entries.forEach((e) => {
+        const opens = (e.enhanced.match(/\\C\[(?!0\])\d+\]/g) || []).length;
+        const closes = (e.enhanced.match(/\\C\[0\]/g) || []).length;
+        if (opens !== closes) unbalanced++;
+    });
+    check("every colour span is closed", unbalanced === 0, unbalanced + " unbalanced");
+
+    // THE invariant, once more, across all four databases after several toggles.
+    for (let i = 0; i < 5; i++) { h.BD.setEnhanced(i % 2 === 0); }
+    h.BD.setEnhanced(false);
+    let drift = 0;
+    [["Items", "$dataItems"], ["Skills", "$dataSkills"], ["Armors", "$dataArmors"], ["Weapons", "$dataWeapons"]].forEach(([file, table]) => {
+        h.db(file).forEach((r, i) => { if (r && h.sandbox[table][i].description !== r.description) drift++; });
+    });
+    check("original view survives repeated toggling byte-identically", drift === 0, drift + " records drifted");
+}
+
+group("Mechanical view - tints are claims, and must be earned");
+{
+    const h = loadMod();
+    h.boot();
+    const TIER = /\s*\d+$/;
+    const St = h.db("States"), Sy = h.db("System");
+
+    // Statuses this record actually references, by any route the derivers read.
+    const statesOf = (r) => {
+        const s = new Set();
+        (r.effects || []).forEach((e) => { if ((e.code === 21 || e.code === 22) && e.dataId > 0 && St[e.dataId]) s.add(St[e.dataId].name.replace(TIER, "").trim().toLowerCase()); });
+        (r.traits || []).forEach((t) => { if ((t.code === 13 || t.code === 14) && St[t.dataId]) s.add(St[t.dataId].name.replace(TIER, "").trim().toLowerCase()); });
+        const m = String(r.note || "").match(/<ApplyState:\s*(\d+)\s*>/i);
+        if (m && St[+m[1]]) s.add(St[+m[1]].name.replace(TIER, "").trim().toLowerCase());
+        return s;
+    };
+    const elementsOf = (r) => {
+        const s = new Set();
+        if (r.damage && r.damage.elementId > 0 && Sy.elements[r.damage.elementId]) s.add(Sy.elements[r.damage.elementId].toLowerCase());
+        (r.traits || []).forEach((t) => { if (t.code === 11 && Sy.elements[t.dataId]) s.add(Sy.elements[t.dataId].toLowerCase()); });
+        return s;
+    };
+
+    // "acid" is both an element and a status of the same name, so the element arm wins on 7 records
+    // that mean the status. Deliberate and recorded - every other unearned tint is a defect.
+    const ALLOWED = { acid: true };
+    const badStates = [], badElements = [];
+    h.BD.entries.forEach((e) => {
+        const okS = statesOf(e.target), okE = elementsOf(e.target);
+        let m;
+        const reS = /\\C\[10\]([^\\]+)\\C\[0\]/g;
+        while ((m = reS.exec(e.enhanced))) { const w = m[1].toLowerCase(); if (!okS.has(w) && !ALLOWED[w]) badStates.push(e.target.name + ": " + w); }
+        const reE = /\\C\[4\]([^\\]+)\\C\[0\]/g;
+        while ((m = reE.exec(e.enhanced))) { const w = m[1].toLowerCase(); if (!okE.has(w) && !ALLOWED[w]) badElements.push(e.target.name + ": " + w); }
+    });
+
+    check("no word is tinted as a status the record does not reference", badStates.length === 0, badStates.slice(0, 5).join(" | "));
+    check("no word is tinted as an element the record does not carry", badElements.length === 0, badElements.slice(0, 5).join(" | "));
 }
 
 done();
