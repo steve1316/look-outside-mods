@@ -172,4 +172,88 @@ var BetterDescriptions = BetterDescriptions || {};
      */
     BetterDescriptions.isEnhanced = function() { return showEnhanced; };
 
+    // //////////////////////////////////////////////////////////////////////////////////////////////////
+    // //////////////////////////////////////////////////////////////////////////////////////////////////
+    // Input
+
+    var lastInput = "key";
+    var padWasDown = false;
+
+    /**
+     * Reports whether a control-remapping scene is open. Those scenes wait for a raw button press to assign it.
+     * @returns {boolean} True while Mano_InputConfig's key or gamepad scene is active.
+     */
+    function isRebindingScene() {
+        if (typeof SceneManager === "undefined" || !SceneManager._scene) return false;
+        var name = SceneManager._scene.constructor ? SceneManager._scene.constructor.name : "";
+        return /InputConfig|GamepadConfig|KeyConfig/i.test(name);
+    }
+
+    /**
+     * Remembers which device the player last used so the hint can name the right button.
+     * @param {string} kind Either `"key"` or `"pad"`.
+     */
+    function noteInput(kind) {
+        if (lastInput === kind) return;
+        lastInput = kind;
+        refreshOpenWindows();
+    }
+
+    /** Flips the view and saves the choice, unless a remapping scene is open. */
+    function toggleNow() {
+        if (isRebindingScene()) return;
+        setEnhanced(!showEnhanced);
+        if (typeof ConfigManager !== "undefined" && ConfigManager.save) ConfigManager.save();
+    }
+
+    if (typeof document !== "undefined") {
+        /**
+         * Handles a raw keydown event, tracking the input device and toggling the view on the configured key.
+         * The rebinding-scene guard runs before `preventDefault`, so Mano_InputConfig's key-config scene still sees the raw key.
+         * @param {KeyboardEvent} event Browser keydown event.
+         */
+        document.addEventListener("keydown", function(event) {
+            noteInput("key");
+            if (event.code !== config.toggleKey) return;
+            if (isRebindingScene()) return;
+            event.preventDefault();
+            toggleNow();
+        });
+    }
+
+    // Polled straight from the Gamepad API rather than registered in Input.gamepadMapper, because
+    // Mano_InputConfig replaces that whole object when it loads its saved config and would drop the binding.
+    if (config.toggleButton >= 0 && typeof SceneManager !== "undefined" && typeof navigator !== "undefined" && navigator.getGamepads) {
+        var _updateInputData = SceneManager.updateInputData;
+        /** Polls raw gamepad buttons every frame, tracking the input device and toggling the view on the configured button. */
+        SceneManager.updateInputData = function() {
+            _updateInputData.apply(this, arguments);
+            var down = false;
+            var anyButton = false;
+            try {
+                var pads = navigator.getGamepads();
+                for (var i = 0; i < pads.length; i++) {
+                    var pad = pads[i];
+                    if (!pad || !pad.connected || !pad.buttons) continue;
+                    for (var b = 0; b < pad.buttons.length; b++) {
+                        if (pad.buttons[b] && pad.buttons[b].pressed) { anyButton = true; break; }
+                    }
+                    var button = pad.buttons[config.toggleButton];
+                    if (button && button.pressed) down = true;
+                }
+            } catch (err) {
+                down = false;
+            }
+            if (anyButton) noteInput("pad");
+            if (down && !padWasDown) toggleNow();
+            padWasDown = down;
+        };
+    }
+
+    /**
+     * Returns the last input device used.
+     * @returns {string} Either `"key"` or `"pad"`.
+     */
+    BetterDescriptions.lastInput = function() { return lastInput; };
+
 })();

@@ -45,4 +45,40 @@ group("Task 2 - toggle core");
     check("a missing flag defaults to enhanced", item.description === "TEST ENHANCED");
 }
 
+group("Task 3 - input");
+{
+    const h = loadMod();
+    const item = h.sandbox.$dataItems[93];
+    h.BD.register(item, "VAN", "ENH");
+    h.BD.setEnhanced(true);
+
+    h.fire("Tab");
+    check("Tab toggles", item.description === "VAN", item.description);
+    h.fire("KeyZ");
+    check("an unrelated key does not toggle", item.description === "VAN");
+    h.fire("Tab");
+    check("Tab toggles back", item.description === "ENH");
+    check("toggling saves the config", h.sandbox.ConfigManager.saveCount >= 2);
+
+    const frame = () => h.sandbox.SceneManager.updateInputData();
+    h.pad.buttons[8].pressed = true; frame();
+    check("gamepad button 8 toggles", item.description === "VAN");
+    frame(); frame();
+    check("holding does not repeat", item.description === "VAN");
+    h.pad.buttons[8].pressed = false; frame();
+    check("releasing does not toggle", item.description === "VAN");
+
+    check("device tracking follows the pad", h.BD.lastInput() === "pad");
+    h.fire("KeyM");
+    check("device tracking follows the keyboard", h.BD.lastInput() === "key");
+
+    function Scene_GamepadConfig_V() {}
+    h.sandbox.SceneManager._scene = new Scene_GamepadConfig_V();
+    const before = item.description;
+    h.pad.buttons[8].pressed = true; frame();
+    check("inert while remapping controls", item.description === before);
+    h.pad.buttons[8].pressed = false; frame();
+    h.sandbox.SceneManager._scene = null;
+}
+
 done();
