@@ -256,4 +256,144 @@ var BetterDescriptions = BetterDescriptions || {};
      */
     BetterDescriptions.lastInput = function() { return lastInput; };
 
+    // //////////////////////////////////////////////////////////////////////////////////////////////////
+    // //////////////////////////////////////////////////////////////////////////////////////////////////
+    // Help box
+
+    var GLUE = "\x01";
+
+    /**
+     * Builds the hint legend for the device currently in use.
+     * @returns {string} For example `"[TAB] original"` or `"[SELECT] enhanced"`.
+     */
+    function hintLabel() {
+        var button = lastInput === "pad" ? config.buttonLabel : config.toggleKey.replace(/^(Key|Digit)/, "");
+        return "[" + button.toUpperCase() + "] " + (showEnhanced ? "original" : "enhanced");
+    }
+
+    /**
+     * Wraps text to a pixel width, keeping colour spans intact.
+     * A span split across lines would leave one line tinted with no reset and the next reset with no tint.
+     * @param {function} measure Maps a string to its pixel width.
+     * @param {string} text Text to wrap, which may contain literal newlines.
+     * @param {number} width Maximum pixel width per line.
+     * @returns {string[]} Wrapped lines.
+     */
+    function wrapToWidth(measure, text, width) {
+        var out = [];
+        var paragraphs = String(text).split("\n");
+        for (var p = 0; p < paragraphs.length; p++) {
+            var glued = paragraphs[p].replace(/\\C\[(?!0\])\d+\][^\\]*?\\C\[0\]/g, function(m) { return m.split(" ").join(GLUE); });
+            var words = glued.split(" ");
+            var line = "";
+            for (var i = 0; i < words.length; i++) {
+                var candidate = line ? line + " " + words[i] : words[i];
+                if (line && measure(candidate.split(GLUE).join(" ")) > width) {
+                    out.push(line.split(GLUE).join(" "));
+                    line = words[i];
+                } else {
+                    line = candidate;
+                }
+            }
+            if (line) out.push(line.split(GLUE).join(" "));
+        }
+        return out;
+    }
+
+    /**
+     * Splits wrapped lines into pages.
+     * @param {string[]} lines Wrapped lines.
+     * @param {number} perPage Lines the window can show at once.
+     * @returns {Array<string[]>} One entry per page.
+     */
+    function paginate(lines, perPage) {
+        var pages = [];
+        for (var i = 0; i < lines.length; i += perPage) pages.push(lines.slice(i, i + perPage));
+        return pages.length ? pages : [[]];
+    }
+
+    BetterDescriptions.hintLabel = hintLabel;
+    BetterDescriptions.wrapToWidth = wrapToWidth;
+    BetterDescriptions.paginate = paginate;
+    BetterDescriptions.drawCoveredText = drawCoveredText;
+
+    if (config.showHint && typeof Window_Help !== "undefined") {
+        var _Window_Help_refresh = Window_Help.prototype.refresh;
+        /** Redraws the help window, routing covered descriptions through `drawCoveredText` instead of the original layout. */
+        Window_Help.prototype.refresh = function() {
+            if (!shownTexts[this._text]) { _Window_Help_refresh.apply(this, arguments); return; }
+            this._bdPages = null;
+            this._bdPage = 0;
+            this._bdTicks = 0;
+            drawCoveredText(this);
+        };
+
+        var _Window_Help_update = Window_Help.prototype.update;
+        /** Advances the paging timer and flips a covered description to its next page once `config.pageSeconds` elapses. */
+        Window_Help.prototype.update = function() {
+            _Window_Help_update.apply(this, arguments);
+            if (!this._bdPages || this._bdPages.length < 2 || config.pageSeconds <= 0) return;
+            this._bdTicks = (this._bdTicks || 0) + 1;
+            if (this._bdTicks < config.pageSeconds * 60) return;
+            this._bdTicks = 0;
+            this._bdPage = (this._bdPage + 1) % this._bdPages.length;
+            drawCoveredText(this);
+        };
+    }
+
+    /**
+     * Prefixes text with the escape that sets the mechanical view's font size.
+     * `textSizeEx` and `drawTextEx` both call `resetFontSettings()` as their first statement, so a
+     * `contents.fontSize` assigned beforehand is thrown away before a single glyph is measured or drawn.
+     * The `\FS[n]` escape is handled by `processAllText`, which runs after that reset, so it is the only
+     * way to get a size through. Measuring and drawing must use the identical prefix or the wrap budget
+     * will not match what ends up on screen.
+     * The size belongs to the mechanical view alone. `drawCoveredText` also draws the developers' prose,
+     * because `setEnhanced` marks whichever wording is currently shown, so the prefix is withheld in the
+     * original view - that view keeps the engine's own size, and the shift signals which view is showing.
+     * @param {string} text A line of the shown description.
+     * @returns {string} The line, with the font-size escape in front of it only in the mechanical view.
+     */
+    function atMechanicalSize(text) {
+        if (!showEnhanced) return text;
+        return "\\FS[" + config.mechanicalFontSize + "]" + text;
+    }
+
+    /**
+     * Draws a covered description into the help window, reserving room for the hint on the last line.
+     * @param {object} win The `Window_Help` instance being drawn.
+     */
+    function drawCoveredText(win) {
+        var rect = win.baseTextRect();
+        var lineHeight = win.lineHeight();
+        var rows = Math.max(1, Math.floor(rect.height / lineHeight));
+        win.contents.clear();
+
+        // The hint strip goes through contents.drawText, a Bitmap method that does not reset, so it is
+        // sized by assigning contents.fontSize directly. The body is sized by escape instead - see above.
+        var hintSize = Math.max(12, config.mechanicalFontSize - 10);
+        win.contents.fontSize = hintSize;
+        var hint = hintLabel();
+        var strip = win.contents.measureTextWidth(hint) + 12;
+
+        if (!win._bdPages) {
+            /**
+             * Measures the pixel width of formatted text at the mechanical font size, honouring `\C[n]` colour codes.
+             * @param {string} s Text to measure.
+             * @returns {number} Pixel width of the text.
+             */
+            var measure = function(s) { return win.textSizeEx(atMechanicalSize(s)).width; };
+            win._bdPages = paginate(wrapToWidth(measure, win._text, rect.width - strip), rows);
+            win._bdPage = 0;
+        }
+        var page = win._bdPages[win._bdPage] || [];
+        for (var i = 0; i < page.length; i++) win.drawTextEx(atMechanicalSize(page[i]), rect.x, rect.y + i * lineHeight, rect.width - strip);
+
+        win.contents.fontSize = hintSize;
+        win.changePaintOpacity(false);
+        win.contents.drawText(hint, rect.x, rect.y + (rows - 1) * lineHeight, rect.width, lineHeight, "right");
+        win.changePaintOpacity(true);
+        win.resetFontSettings();
+    }
+
 })();

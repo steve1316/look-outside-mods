@@ -81,4 +81,97 @@ group("Task 3 - input");
     h.sandbox.SceneManager._scene = null;
 }
 
+group("Task 4 - help box");
+{
+    const h = loadMod();
+    const measure = (s) => s.replace(/\\C\[\d+\]/g, "").length * 10;
+
+    check("hint names the keyboard by default", h.BD.hintLabel() === "[TAB] original", h.BD.hintLabel());
+    h.pad.buttons[3].pressed = true;
+    h.sandbox.SceneManager.updateInputData();
+    h.pad.buttons[3].pressed = false;
+    check("hint names the pad after pad input", h.BD.hintLabel() === "[SELECT] original", h.BD.hintLabel());
+    h.fire("KeyM");
+    h.BD.setEnhanced(false);
+    check("hint says 'enhanced' while showing the original", h.BD.hintLabel() === "[TAB] enhanced", h.BD.hintLabel());
+    h.BD.setEnhanced(true);
+
+    const lines = h.BD.wrapToWidth(measure, "one two three four five six seven eight", 200);
+    check("wrapping never exceeds the width", lines.every((l) => measure(l) <= 200), JSON.stringify(lines));
+    check("wrapping loses no words", lines.join(" ").split(/\s+/).length === 8, JSON.stringify(lines));
+
+    const glued = h.BD.wrapToWidth(measure, "\\C[24]max HP\\C[0] and more words to force a break here now", 200);
+    check("a colour span is never split across lines", glued.every((l) => {
+        const opens = (l.match(/\\C\[(?!0\])\d+\]/g) || []).length;
+        const closes = (l.match(/\\C\[0\]/g) || []).length;
+        return opens === closes;
+    }), JSON.stringify(glued));
+
+    check("two lines never paginate", h.BD.paginate(["a", "b"], 2).length === 1);
+    const pages = h.BD.paginate(["a", "b", "c"], 2);
+    check("three lines make two pages", pages.length === 2, JSON.stringify(pages));
+    check("first page holds the first two lines", pages[0].join("|") === "a|b");
+}
+
+group("Mechanical view - 18pt rendering");
+{
+    const h = loadMod();
+    check("font size defaults to 18", h.BD.config.mechanicalFontSize === 18, String(h.BD.config.mechanicalFontSize));
+
+    const h2 = loadMod({ params: { mechanicalFontSize: 14 } });
+    check("font size is configurable", h2.BD.config.mechanicalFontSize === 14, String(h2.BD.config.mechanicalFontSize));
+
+    const h3 = loadMod({ params: { mechanicalFontSize: 0 } });
+    check("a zero font size falls back to the default rather than vanishing", h3.BD.config.mechanicalFontSize === 18, String(h3.BD.config.mechanicalFontSize));
+
+    // MZ calls resetFontSettings() as the first statement of both textSizeEx and drawTextEx, so a
+    // contents.fontSize set beforehand never survives. The stub reproduces that, and records the size
+    // every run of text actually ran at. Without the \FS escape these come back as the engine's 22.
+    const body = "Deals \\C[6]60\\C[0] \\C[4]fire\\C[0] damage to all enemies. Costs \\C[6]6\\C[0] \\C[23]STM\\C[0], 1 Monty Special.";
+    const w = makeWindowStub({ text: body, width: 720, height: 108 });
+    h.BD.drawCoveredText(w);
+    check("every measured run runs at the mechanical font size", w.measuredSizes.length > 0 && w.measuredSizes.every((s) => s === 18), JSON.stringify(w.measuredSizes));
+    check("every drawn body run runs at the mechanical font size", w.drawnSizes.length > 0 && w.drawnSizes.every((s) => s === 18), JSON.stringify(w.drawnSizes));
+    check("the hint strip stays smaller than the body", w.hintSizes.length === 1 && w.hintSizes[0] < 18, JSON.stringify(w.hintSizes));
+
+    // A configured size must reach the glass too, not just the config object.
+    const w2 = makeWindowStub({ text: body, width: 720, height: 108 });
+    h2.BD.drawCoveredText(w2);
+    check("a configured font size reaches the drawn text", w2.drawnSizes.length > 0 && w2.drawnSizes.every((s) => s === 14), JSON.stringify(w2.drawnSizes));
+
+    // The wrap budget is only honest if measuring and drawing agree on the size.
+    check("measuring and drawing agree on the size", w.measuredSizes.concat(w.drawnSizes).every((s) => s === 18), JSON.stringify(w.measuredSizes.concat(w.drawnSizes)));
+
+    // `drawCoveredText` is not mechanical-view-only. `setEnhanced` marks whichever wording is currently
+    // shown, so in the original view the hook routes the developers' own prose through it. That text must
+    // keep the engine's 22pt - the size shift is what signals which of the two views is showing.
+    const hv = loadMod();
+    hv.boot();
+    const spray = hv.sandbox.$dataItems[2];
+    hv.BD.setEnhanced(false);
+    const wOriginal = makeWindowStub({ text: spray.description });
+    hv.BD.drawCoveredText(wOriginal);
+    const vanillaSizes = wOriginal.drawnSizes;
+    check("the developers' text draws at the engine size", vanillaSizes.length > 0 && vanillaSizes.every((s) => s === 22), JSON.stringify(vanillaSizes));
+    check("and measuring agrees with drawing in the original view", wOriginal.measuredSizes.every((s) => s === 22), JSON.stringify(wOriginal.measuredSizes));
+
+    hv.BD.setEnhanced(true);
+    const wMechanical = makeWindowStub({ text: spray.description });
+    hv.BD.drawCoveredText(wMechanical);
+    const mechSizes = wMechanical.drawnSizes;
+    check("the same record still draws at the mechanical size when enhanced", mechSizes.length > 0 && mechSizes.every((s) => s === 18), JSON.stringify(mechSizes));
+    check("and measuring agrees with drawing in the enhanced view", wMechanical.measuredSizes.every((s) => s === 18), JSON.stringify(wMechanical.measuredSizes));
+    check("the two views really do draw at different sizes", wOriginal.drawnSizes[0] !== wMechanical.drawnSizes[0], wOriginal.drawnSizes[0] + " vs " + wMechanical.drawnSizes[0]);
+
+    // 18pt fits more per line than 22pt, which is the whole point: fewer records need a second page.
+    const long = "Resists poison, blind, panic and 19 others 30%. Immune to bleed, burn and acid. Changes max HP +50%, max STM -50%, agility +20%.";
+    const wLarge = makeWindowStub({ text: long, width: 480, height: 108, mainFontSize: 22 });
+    h.BD.drawCoveredText(wLarge);
+    const at18 = wLarge._bdPages.length;
+    const wVanilla = makeWindowStub({ text: long, width: 480, height: 108, mainFontSize: 22 });
+    wVanilla.textSizeEx = (t) => ({ width: String(t).replace(/\\C\[\d+\]|\\FS\[\d+\]/g, "").length * 11, height: 36 });
+    h.BD.drawCoveredText(wVanilla);
+    check("18pt needs no more pages than 22pt would", at18 <= wVanilla._bdPages.length, at18 + " vs " + wVanilla._bdPages.length);
+}
+
 done();
