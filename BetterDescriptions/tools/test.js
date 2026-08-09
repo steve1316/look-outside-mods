@@ -174,4 +174,38 @@ group("Mechanical view - 18pt rendering");
     check("18pt needs no more pages than 22pt would", at18 <= wVanilla._bdPages.length, at18 + " vs " + wVanilla._bdPages.length);
 }
 
+group("Mechanical view - damage");
+{
+    const h = loadMod();
+    const D = h.BD.deriveDamage;
+    // Fire Breath: 60 - b.def/2, element Fire, scope 2 (all enemies)
+    const fireBreath = D(h.pristine.skills[147]);
+    check("states amount, element and scope", /60/.test(fireBreath) && /fire/i.test(fireBreath) && /all enemies/i.test(fireBreath), JSON.stringify(fireBreath));
+    // Multibite: scope 6 (4 random enemies), repeats 1
+    check("states a random-target scope", /4 random/i.test(D(h.pristine.skills[62])), JSON.stringify(D(h.pristine.skills[62])));
+    // Spray and Pray: repeats 2 over 4 random enemies, successRate 85
+    check("states repeats and accuracy", /85%/.test(D(h.pristine.skills[258])), JSON.stringify(D(h.pristine.skills[258])));
+    // Snowball item: 40 - b.def, element Cold
+    check("works on items too", /40/.test(D(h.pristine.items[93])), JSON.stringify(D(h.pristine.items[93])));
+    check("a record with no damage yields nothing", D(h.pristine.items[11]) === null, JSON.stringify(D(h.pristine.items[11])));
+    check("a drain is described as draining", /drain/i.test(D(h.pristine.skills[715])), JSON.stringify(D(h.pristine.skills[715])));
+    // Spray and Pray's formula opens "0 + a.mat*0.75", so a naive leading-integer read prints "Deals 0".
+    check("a zero leading constant is not reported as the damage", !/\b0\b/.test(D(h.pristine.skills[258])), JSON.stringify(D(h.pristine.skills[258])));
+    // Hecatomb is "100 + a.atk*2 - b.def". The 100 is a floor, not the damage.
+    check("a constant is dropped when the formula scales off the user", !/100/.test(D(h.pristine.skills[1038])), JSON.stringify(D(h.pristine.skills[1038])));
+    // Vampire Strike is a type 5 HP drain, so its target takes "from", not "to".
+    check("a drain takes its target with from", /from one enemy/.test(D(h.pristine.skills[715])), JSON.stringify(D(h.pristine.skills[715])));
+    // Every damage sentence names a unit. A bare number is the defect Task 7 hunts for.
+    const named = (id) => /HP|STM|damage/.test(D(h.pristine.skills[id]));
+    check("no damage sentence states a bare number", named(147) && named(715), JSON.stringify(D(h.pristine.skills[715])));
+    // Obliteration is "200+b.hp*0.8" - an execute move. Stating 200 understates it without bound.
+    check("an added target term drops the constant", !/200/.test(D(h.pristine.skills[940])), JSON.stringify(D(h.pristine.skills[940])));
+    // Healing is "32 + 24*danViewers()", which reads live game state rather than an actor stat.
+    check("an added game-state call drops the constant", !/32/.test(D(h.pristine.skills[350])), JSON.stringify(D(h.pristine.skills[350])));
+    // Cash Sock is "10+coinSockCalc() - b.def/2" - added dynamic term wins over the subtracted one.
+    check("one added dynamic term is enough to drop the constant", !/10/.test(D(h.pristine.skills[412])), JSON.stringify(D(h.pristine.skills[412])));
+    // A subtracted term only mitigates, so the constant survives as a ceiling.
+    check("a subtracted term keeps the constant", /60/.test(D(h.pristine.skills[147])), JSON.stringify(D(h.pristine.skills[147])));
+}
+
 done();

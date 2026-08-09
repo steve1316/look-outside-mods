@@ -533,6 +533,39 @@ var BetterDescriptions = BetterDescriptions || {};
     }
 
     /**
+     * Describes a record's damage: how much, of what element, at what target, how often and how reliably.
+     * @param {object} record An item or skill record.
+     * @returns {string|null} A damage sentence, or null when the record deals none.
+     */
+    function deriveDamage(record) {
+        var d = record.damage;
+        if (!d || !d.type) return null;
+        var spec = DAMAGE_TEXT[d.type] || DAMAGE_TEXT[1];
+        // An element only means something for damage and drain types. Stating one on a restore ("Restores cold HP") is nonsense.
+        var isRestore = spec.kind === "restore";
+        // A drain's element is real, but gluing it in front of the unit reads as draining the substance
+        // itself ("Drains shadow HP"). It goes after the clause instead, where it qualifies the damage.
+        var isDrain = spec.kind === "drain";
+        var element = isRestore ? "" : elementName(d.elementId);
+        var base = formulaBase(d.formula);
+        var scope = SCOPE_TEXT[record.scope] || "";
+        // A restore with no stated amount says nothing the recovery clause does not say better, and saying
+        // both leaves the player reading the same fact twice with one half empty.
+        if (isRestore && !base && hasRecoveryEffect(record)) return null;
+        // A formula at or above the maximum any character can reach is an engine full-heal sentinel, not a figure.
+        var isFullRestore = isRestore && base && Number(base) >= maxHpScale();
+        var verb = isFullRestore ? "Fully restores" : spec.verb;
+        if (isFullRestore) base = "";
+        var text = verb + (base ? " " + base : "") + (element && !isDrain ? " " + element : "") + " " + spec.unit;
+        if (scope) text += " " + spec.prep + " " + scope;
+        if (element && isDrain) text += " as " + element + " damage";
+        if (record.repeats > 1) text += ", " + record.repeats + " times";
+        text += ".";
+        if (record.successRate && record.successRate < 100) text += " " + record.successRate + "% accuracy.";
+        return text;
+    }
+
+    /**
      * Collects the skills a player can actually reach, through class learning or an equipment trait.
      * @returns {object} Map of skill id to true.
      */
@@ -579,6 +612,7 @@ var BetterDescriptions = BetterDescriptions || {};
         return stateName(id).replace(STATE_TIERS, "").trim();
     }
 
+    BetterDescriptions.deriveDamage = deriveDamage;
     // //////////////////////////////////////////////////////////////////////////////////////////////////
     // //////////////////////////////////////////////////////////////////////////////////////////////////
     // Colour
