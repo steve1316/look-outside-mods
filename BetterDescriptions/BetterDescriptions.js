@@ -566,6 +566,48 @@ var BetterDescriptions = BetterDescriptions || {};
     }
 
     /**
+     * Builds a recovery clause stating flat and percentage parts separately.
+     * The developers' "at least N" wording exists because these items restore N plus a percentage of the maximum.
+     * When HP and STM share the exact same placeholder rate, it is stated once for both instead of twice, since
+     * that mirrors how the devs phrase a shared rate and reads better than restating the same figure.
+     * @param {object} record An item record.
+     * @returns {string|null} The clause, or null when the item restores nothing.
+     */
+    function deriveRecovery(record) {
+        var hp = null;
+        var mp = null;
+        var effects = record.effects || [];
+        for (var i = 0; i < effects.length; i++) {
+            if (effects[i].code === 11) hp = effects[i];
+            if (effects[i].code === 12) mp = effects[i];
+        }
+        var hpIsPlaceholderRate = hp && hp.value1 > 0 && hp.value2 <= 1;
+        var mpIsPlaceholderRate = mp && mp.value1 > 0 && mp.value2 <= 1;
+        if (hpIsPlaceholderRate && mpIsPlaceholderRate && hp.value1 === mp.value1) {
+            return "Recovers " + Math.round(hp.value1 * 100) + "% of max HP and STM.";
+        }
+        var parts = [];
+        if (hp && (hp.value1 || hp.value2)) parts.push(amount(hp, "HP"));
+        if (mp && (mp.value1 || mp.value2)) parts.push(amount(mp, "STM"));
+        if (!parts.length) return null;
+        return "Recovers " + parts.join(", and ") + ".";
+    }
+
+    /**
+     * Renders one recovery part as flat plus percentage. Every percentage names its own referent, because a
+     * bare "+1%" in the second half of a two-part clause is a percentage of nothing the player can identify.
+     * @param {object} effect An effect with `value1` as a fraction of maximum and `value2` as a flat amount.
+     * @param {string} unit Either `"HP"` or `"STM"`.
+     * @returns {string} For example `"16 HP +3% of max HP"` or `"3% of max HP"`.
+     */
+    function amount(effect, unit) {
+        var pct = Math.round(effect.value1 * 100);
+        // value2 of 1 alongside a real percentage is an engine placeholder, not a genuine flat amount.
+        if (!effect.value2 || (effect.value1 > 0 && effect.value2 <= 1)) return pct + "% of max " + unit;
+        return effect.value2 + " " + unit + (pct ? " +" + pct + "% of max " + unit : "");
+    }
+
+    /**
      * Collects the skills a player can actually reach, through class learning or an equipment trait.
      * @returns {object} Map of skill id to true.
      */
@@ -592,6 +634,69 @@ var BetterDescriptions = BetterDescriptions || {};
     }
 
     /**
+     * Builds a clause describing a skill's status effects, since those odds appear nowhere in the game's own text.
+     * Tiered states such as Bleed1/2/3 are rolled separately, so their combined chance is what the player cares about.
+     * The verb comes from the record's scope: allies, downed allies and the user get "apply" since a state
+     * applied there is never hostile, everything else gets "inflict". A guaranteed rate drops "chance to"
+     * entirely, since stating a certainty as a chance is noise.
+     * @param {object} record A skill record.
+     * @returns {string|null} The clause, or null when the skill applies or inflicts nothing derivable.
+     */
+    function deriveSkill(record) {
+        var effects = record.effects || [];
+        var families = {};
+        for (var i = 0; i < effects.length; i++) {
+            var e = effects[i];
+            if (e.code !== 21 || e.dataId <= 0) continue;
+            var state = (typeof $dataStates !== "undefined" && $dataStates[e.dataId]) ? $dataStates[e.dataId] : null;
+            if (!state || !state.name) continue;
+            var family = stateFamily(e.dataId);
+            if (!families[family]) families[family] = { chances: [], turns: "", bestValue: -1, bestMaxTurns: -1 };
+            var fam = families[family];
+            fam.chances.push(e.value1);
+            // The duration comes from the tier most likely to actually land, not from whichever
+            // effect happens to be listed first - some records store their tiers worst-first.
+            if (state.maxTurns && (e.value1 > fam.bestValue || (e.value1 === fam.bestValue && state.maxTurns > fam.bestMaxTurns))) {
+                fam.bestValue = e.value1;
+                fam.bestMaxTurns = state.maxTurns;
+                fam.turns = turnRange(state, " (", ")");
+            }
+        }
+        var isAlly = !!ALLY_SCOPES[record.scope];
+        var verb = isAlly ? "apply" : "inflict";
+        var bareVerb = isAlly ? "applies" : "inflicts";
+        // Statuses sharing the same odds are grouped under one lead, so a skill rolling many statuses
+        // states "X% chance to inflict a, b and c" once instead of repeating the lead for every status.
+        var groups = {};
+        var order = [];
+        for (var name in families) {
+            var fam = families[name];
+            var chances = fam.chances;
+            var combined = 1;
+            for (var c = 0; c < chances.length; c++) combined *= (1 - chances[c]);
+            var pct = Math.round((1 - combined) * 100);
+            if (!pct) continue;
+            var upTo = chances.length > 1;
+            var key = pct + (upTo ? "u" : "");
+            if (!groups[key]) { groups[key] = { pct: pct, upTo: upTo, members: [] }; order.push(key); }
+            groups[key].members.push(name + fam.turns);
+        }
+        var parts = [];
+        for (var k = 0; k < order.length; k++) {
+            var g = groups[order[k]];
+            // Each status is rolled separately, so one lead covering several of them needs "each" or it
+            // reads as a single roll that lands the whole list at once.
+            var lead = g.pct === 100
+                ? bareVerb
+                : (g.upTo ? "up to " : "") + g.pct + "% chance" + (g.members.length > 1 ? " each" : "") + " to " + verb;
+            parts.push(lead + " " + joinWithAnd(g.members));
+        }
+        if (!parts.length) return null;
+        var text = parts.join(", and ") + ".";
+        return text.charAt(0).toUpperCase() + text.slice(1);
+    }
+
+    /**
      * Looks up a state's display name.
      * @param {number} id State id.
      * @returns {string} Lowercased state name, or an empty string when the state does not exist.
@@ -612,7 +717,40 @@ var BetterDescriptions = BetterDescriptions || {};
         return stateName(id).replace(STATE_TIERS, "").trim();
     }
 
+    /**
+     * Joins names with a comma-and-and list, so three or more read as "a, b and c" rather than a
+     * trailing comma list.
+     * @param {string[]} names Names to join, already lowercased.
+     * @returns {string} The joined list.
+     */
+    function joinWithAnd(names) {
+        if (names.length === 1) return names[0];
+        return names.slice(0, -1).join(", ") + " and " + names[names.length - 1];
+    }
+
+    /**
+     * Describes the statuses a record cures, which is effect code 22. Tiered states such as Bleed1/2/3
+     * collapse into one family name, since the player does not think of them as three separate cures.
+     * @param {object} record An item or skill record.
+     * @returns {string|null} A cure sentence, or null when the record cures nothing.
+     */
+    function deriveStatesRemoved(record) {
+        var names = [];
+        var effects = record.effects || [];
+        for (var i = 0; i < effects.length; i++) {
+            if (effects[i].code !== 22 || effects[i].dataId <= 0) continue;
+            var family = stateFamily(effects[i].dataId);
+            if (family && names.indexOf(family) === -1) names.push(family);
+        }
+        if (!names.length) return null;
+        return "Cures " + joinWithAnd(names) + ".";
+    }
+
     BetterDescriptions.deriveDamage = deriveDamage;
+    BetterDescriptions.deriveRecovery = deriveRecovery;
+    BetterDescriptions.deriveSkill = deriveSkill;
+    BetterDescriptions.deriveStatesRemoved = deriveStatesRemoved;
+
     // //////////////////////////////////////////////////////////////////////////////////////////////////
     // //////////////////////////////////////////////////////////////////////////////////////////////////
     // Colour

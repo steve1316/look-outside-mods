@@ -208,4 +208,37 @@ group("Mechanical view - damage");
     check("a subtracted term keeps the constant", /60/.test(D(h.pristine.skills[147])), JSON.stringify(D(h.pristine.skills[147])));
 }
 
+group("Mechanical view - states removed and durations");
+{
+    const h = loadMod();
+    // Balm cures bleeding, burns and acid - effect code 22 entries
+    const balm = h.BD.deriveStatesRemoved(h.pristine.items[10]);
+    check("names every cured status", /bleed/i.test(balm) && /burn/i.test(balm) && /acid/i.test(balm), JSON.stringify(balm));
+    check("a record that cures nothing yields nothing", h.BD.deriveStatesRemoved(h.pristine.items[18]) === null);
+    // Moss Flow inflicts Poison, which lasts 8-20 turns
+    const moss = h.BD.deriveSkill(h.pristine.skills[36]);
+    check("an inflicted state carries its duration", /turns/.test(moss), JSON.stringify(moss));
+    // Balm cures Bleed1, Bleed2 and Bleed3, which are one status at three tiers, not three cures.
+    check("cured tier families collapse to one name", !/bleed\d/.test(balm) && (balm.match(/bleed/g) || []).length === 1, JSON.stringify(balm));
+
+    // Eye Drops applies Anti-blind to an ally (scope 7). Nobody inflicts a cure on themselves.
+    const drops = h.BD.deriveSkill(h.pristine.items[6]);
+    check("an ally-targeted state is applied, not inflicted", /appl/i.test(drops) && !/inflict/i.test(drops), JSON.stringify(drops));
+    // Moss Flow targets all enemies (scope 2), so its poison is still inflicted.
+    check("an enemy-targeted state is still inflicted", /inflict/i.test(h.BD.deriveSkill(h.pristine.skills[36])), JSON.stringify(h.BD.deriveSkill(h.pristine.skills[36])));
+    // A guaranteed rate needs no percentage in front of it.
+    check("a certainty is not written as a chance", !/100% chance/.test(drops), JSON.stringify(drops));
+    // Trap items hand an ally a harmful state. The neutral verb must still be used.
+    check("a trap item is described neutrally, not as an affliction", /appl/i.test(h.BD.deriveSkill(h.pristine.items[30])), JSON.stringify(h.BD.deriveSkill(h.pristine.items[30])));
+
+    // Roach Cannon's tiers are stored worst-first: Swarm 3 at 5% for 2-3 turns, Swarm 1 at 100% for 4-5.
+    // The duration must come from the tier that drives the rate, not from whichever effect is listed first.
+    const roach = h.BD.deriveSkill(h.pristine.skills[383]);
+    check("a tier duration comes from the likeliest member", /4-5 turns/.test(roach) && !/2-3 turns/.test(roach), JSON.stringify(roach));
+    // The same record is guaranteed, so it must also take the bare-verb form.
+    check("and the guaranteed tier still reads as a certainty", /^Inflicts swarm/.test(roach), JSON.stringify(roach));
+    // Roach Wave is the same shape at 80%, so the combined rate keeps its percentage but gains the right duration.
+    check("a partial tier rate also takes the likeliest member's duration", /4-5 turns/.test(h.BD.deriveSkill(h.pristine.skills[384])), JSON.stringify(h.BD.deriveSkill(h.pristine.skills[384])));
+}
+
 done();
