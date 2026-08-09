@@ -279,4 +279,26 @@ group("Mechanical view - states removed and durations");
     check("a partial tier rate also takes the likeliest member's duration", /4-5 turns/.test(h.BD.deriveSkill(h.pristine.skills[384])), JSON.stringify(h.BD.deriveSkill(h.pristine.skills[384])));
 }
 
+group("Mechanical view - equipment stats and grants");
+{
+    const h = loadMod();
+    const E = h.BD.deriveEquipment;
+    // Tank Tracks grant Ground Anchor (trait code 43)
+    check("names a granted skill", /Ground Anchor/i.test(E(h.pristine.armors[356])), JSON.stringify(E(h.pristine.armors[356])));
+    // Coat of Arms: trait 61, a 50% chance of a second action
+    check("states extra actions", /act twice|extra action/i.test(E(h.pristine.armors[280])), JSON.stringify(E(h.pristine.armors[280])));
+    // Cowardly Boots: sparam 0 at 0.5, halving the chance of being targeted
+    check("states a target-rate change", /target/i.test(E(h.pristine.armors[272])), JSON.stringify(E(h.pristine.armors[272])));
+    // Training Belt: trait 21, maxHP x1.5 and maxSTM x0.5
+    check("states a multiplied stat", /50%/.test(E(h.pristine.armors[76])), JSON.stringify(E(h.pristine.armors[76])));
+    // Kevlar Suit keeps its element rates
+    check("element rates still reported", /40%/.test(E(h.pristine.armors[20])) && /bullet/i.test(E(h.pristine.armors[20])), JSON.stringify(E(h.pristine.armors[20])));
+
+    // "Taken" is a real status (state 165), so the plain English word inside an sp-param phrase used to
+    // get tinted as if it named that status. Odd Necklace is one of the five armors that showed it.
+    const necklace = h.BD.colourise(h.BD.deriveEquipment(h.pristine.armors[100]));
+    check("an sp-param phrase does not collide with a status name", necklace.indexOf("[10]taken") === -1, JSON.stringify(necklace));
+    check("and the sp-param change is still stated", /25%/.test(necklace) && /physical damage/.test(necklace), JSON.stringify(necklace));
+}
+
 done();

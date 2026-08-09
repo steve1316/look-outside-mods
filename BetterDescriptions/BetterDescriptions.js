@@ -718,6 +718,100 @@ var BetterDescriptions = BetterDescriptions || {};
     }
 
     /**
+     * Renders status entries as one clause per rate, stating each rate once. A record that resists twenty
+     * statuses at the same rate used to print that rate twenty times, which buries the one figure that
+     * matters. Past `RESISTS_NAMED` + 1 members the group names a few and counts the rest instead.
+     * @param {Array<{name: string, rate: number}>} entries Status entries, already tier-collapsed and de-duplicated.
+     * @param {string} suffix Unit written after each rate, either `"%"` for a resistance or `"x"` for a multiplier.
+     * @returns {string} The joined clause body, without the leading verb or the trailing full stop.
+     */
+    function groupedRates(entries, suffix) {
+        var byRate = {};
+        var order = [];
+        for (var i = 0; i < entries.length; i++) {
+            var rate = entries[i].rate;
+            if (!byRate[rate]) { byRate[rate] = []; order.push(rate); }
+            byRate[rate].push(entries[i].name);
+        }
+        var clauses = [];
+        for (var k = 0; k < order.length; k++) {
+            var names = byRate[order[k]];
+            // Only abbreviate when it actually saves something. "a, b, c and 1 other" is longer than naming all four.
+            var listed = names.length > RESISTS_NAMED + 1
+                ? joinWithAnd(names.slice(0, RESISTS_NAMED).concat([(names.length - RESISTS_NAMED) + " others"]))
+                : joinWithAnd(names);
+            clauses.push(listed + " " + order[k] + suffix);
+        }
+        return clauses.join(", ");
+    }
+
+    /**
+     * Builds a clause for equipment, covering the effects the equip screen never shows: element rates,
+     * status immunities, status resistances, param and sp-param multipliers, granted skills and extra
+     * actions. Flat `params` deltas are deliberately omitted because the equip screen already displays them.
+     * @param {object} record An armor or weapon record.
+     * @returns {string|null} The clause, or null when the record has nothing hidden to report.
+     */
+    function deriveEquipment(record) {
+        var traits = record.traits || [];
+        var byRate = {};
+        var immune = [];
+        var resists = [];
+        var vulnerable = [];
+        var seenRate = {};
+        var grants = [];
+        var extras = [];
+        var rates = [];
+        for (var i = 0; i < traits.length; i++) {
+            var t = traits[i];
+            if (t.code === 11 && t.value !== 1) {
+                var element = elementName(t.dataId);
+                if (element) {
+                    var key = (t.value < 1 ? "less " : "more ") + Math.round(Math.abs(1 - t.value) * 100);
+                    if (!byRate[key]) byRate[key] = [];
+                    byRate[key].push(element);
+                }
+            }
+            if (t.code === 14) {
+                var immuneName = stateFamily(t.dataId);
+                if (immuneName && immune.indexOf(immuneName) === -1) immune.push(immuneName);
+            }
+            if (t.code === 13 && t.value !== 1) {
+                var rateName = stateFamily(t.dataId);
+                // A state rate above 1 is a drawback the equip screen never shows either, so listing only
+                // the resistances would hand the player the record's upsides and hide its cost.
+                var into = t.value < 1 ? resists : vulnerable;
+                if (rateName && !seenRate[rateName]) {
+                    seenRate[rateName] = true;
+                    into.push({ name: rateName, rate: t.value < 1 ? Math.round((1 - t.value) * 100) : t.value });
+                }
+            }
+            if (t.code === 43 && typeof $dataSkills !== "undefined" && $dataSkills[t.dataId] && $dataSkills[t.dataId].name) {
+                if (grants.indexOf($dataSkills[t.dataId].name) === -1) grants.push($dataSkills[t.dataId].name);
+            }
+            if (t.code === 61 && t.value) extras.push(Math.round(t.value * 100) + "% chance to act twice per turn");
+            if (t.code === 34 && t.value) extras.push(t.value + " extra " + (t.value === 1 ? "hit" : "hits") + " per attack");
+            if (t.code === 21 && PARAM_NAMES[t.dataId] && t.value !== 1) rates.push(PARAM_NAMES[t.dataId] + " " + signedPercent(t.value));
+            if (t.code === 23 && SPARAM_TEXT[t.dataId] && t.value !== 1) rates.push(SPARAM_TEXT[t.dataId] + " " + signedPercent(t.value));
+        }
+
+        var parts = [];
+        for (var rate in byRate) {
+            var bits = rate.split(" ");
+            parts.push("Take " + bits[1] + "% " + bits[0] + " " + joinWithAnd(byRate[rate]) + " damage");
+        }
+        if (immune.length) parts.push("Immune to " + joinWithAnd(immune));
+        if (resists.length) parts.push("Resists " + groupedRates(resists, "%"));
+        if (vulnerable.length) parts.push("Vulnerable to " + groupedRates(vulnerable, "x"));
+        if (rates.length) parts.push("Changes " + rates.join(", "));
+        if (extras.length) parts.push("Grants " + extras.join(" and "));
+        if (grants.length) parts.push("Unlocks " + grants.join(", "));
+
+        if (!parts.length) return null;
+        return parts.join(". ") + ".";
+    }
+
+    /**
      * Reads a numeric note tag from a record.
      * @param {object} record A database record.
      * @param {string} tag The tag name, without angle brackets.
@@ -805,6 +899,7 @@ var BetterDescriptions = BetterDescriptions || {};
     BetterDescriptions.deriveDamage = deriveDamage;
     BetterDescriptions.deriveRecovery = deriveRecovery;
     BetterDescriptions.deriveSkill = deriveSkill;
+    BetterDescriptions.deriveEquipment = deriveEquipment;
     BetterDescriptions.deriveCosts = deriveCosts;
     BetterDescriptions.deriveDurability = deriveDurability;
     BetterDescriptions.deriveSelfState = deriveSelfState;
