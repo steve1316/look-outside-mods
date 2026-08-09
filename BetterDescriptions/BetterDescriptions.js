@@ -718,6 +718,62 @@ var BetterDescriptions = BetterDescriptions || {};
     }
 
     /**
+     * Reads a numeric note tag from a record.
+     * @param {object} record A database record.
+     * @param {string} tag The tag name, without angle brackets.
+     * @returns {number} The tag's value, or 0 when the tag is absent.
+     */
+    function noteNumber(record, tag) {
+        // Compiled once per tag rather than once per record. Five distinct tags are read across ~1600 records
+        // at boot, so building the pattern inline would mean thousands of throwaway compilations.
+        if (!notePatterns[tag]) notePatterns[tag] = new RegExp("<" + tag + ":\\s*([0-9.]+)\\s*>", "i");
+        var m = String(record.note || "").match(notePatterns[tag]);
+        return m ? Number(m[1]) : 0;
+    }
+
+    /**
+     * Describes everything using a record costs the player.
+     * @param {object} record An item or skill record.
+     * @returns {string|null} A cost sentence, or null when the record is free.
+     */
+    function deriveCosts(record) {
+        var bits = [];
+        if (record.mpCost) bits.push(record.mpCost + " STM");
+        var ammo = noteNumber(record, "ammoUse");
+        if (ammo) bits.push(ammo + " ammo");
+        var hp = noteNumber(record, "hp_cost");
+        if (hp) bits.push(hp + " HP");
+        var itemId = noteNumber(record, "WithItemId");
+        if (itemId && typeof $dataItems !== "undefined" && $dataItems[itemId] && $dataItems[itemId].name) bits.push("1 " + $dataItems[itemId].name);
+        if (!bits.length) return null;
+        return "Costs " + bits.join(", ") + ".";
+    }
+
+    /**
+     * Describes the raised chance of breaking the equipped weapon, which the game states only as a note tag.
+     * @param {object} record An item or skill record.
+     * @returns {string|null} A durability sentence, or null when the record carries no break tag.
+     */
+    function deriveDurability(record) {
+        var rate = noteNumber(record, "breakRate");
+        // A rate of 1 is the default the engine already applies, so stating it tells the player nothing.
+        if (rate <= 1) return null;
+        return rate + "x weapon break chance.";
+    }
+
+    /**
+     * Describes a state the record applies to its own user, which no effect entry exposes.
+     * @param {object} record An item or skill record.
+     * @returns {string|null} A self-state sentence, or null when the record applies none.
+     */
+    function deriveSelfState(record) {
+        var id = noteNumber(record, "ApplyState");
+        var name = id ? stateName(id) : "";
+        if (!name) return null;
+        return "Applies " + name + " to you" + turnRange($dataStates[id], " for ", "") + ".";
+    }
+
+    /**
      * Joins names with a comma-and-and list, so three or more read as "a, b and c" rather than a
      * trailing comma list.
      * @param {string[]} names Names to join, already lowercased.
@@ -749,6 +805,9 @@ var BetterDescriptions = BetterDescriptions || {};
     BetterDescriptions.deriveDamage = deriveDamage;
     BetterDescriptions.deriveRecovery = deriveRecovery;
     BetterDescriptions.deriveSkill = deriveSkill;
+    BetterDescriptions.deriveCosts = deriveCosts;
+    BetterDescriptions.deriveDurability = deriveDurability;
+    BetterDescriptions.deriveSelfState = deriveSelfState;
     BetterDescriptions.deriveStatesRemoved = deriveStatesRemoved;
 
     // //////////////////////////////////////////////////////////////////////////////////////////////////

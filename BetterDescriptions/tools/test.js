@@ -208,6 +208,44 @@ group("Mechanical view - damage");
     check("a subtracted term keeps the constant", /60/.test(D(h.pristine.skills[147])), JSON.stringify(D(h.pristine.skills[147])));
 }
 
+group("Mechanical view - costs, durability, self states");
+{
+    const h = loadMod();
+    // Spray and Pray: mpCost 4, <ammoUse:8>
+    const spray = h.BD.deriveCosts(h.pristine.skills[258]);
+    check("states STM and ammo cost", /4 STM/.test(spray) && /8 ammo/.test(spray), JSON.stringify(spray));
+    // Fire Breath: mpCost 6, <WithItemId:114> Monty Special
+    check("names a consumed item", /Monty Special/.test(h.BD.deriveCosts(h.pristine.skills[147])), JSON.stringify(h.BD.deriveCosts(h.pristine.skills[147])));
+    // Jaw Revolver reload: <hp_cost:15>
+    check("states an HP cost", /15 HP/.test(h.BD.deriveCosts(h.pristine.skills[810])), JSON.stringify(h.BD.deriveCosts(h.pristine.skills[810])));
+    // Toss Garbage (163) is genuinely costless: mpCost 0 and no ammoUse, hp_cost or WithItemId tag.
+    // Do not use a gun skill here - Pistol Shot looks free but carries <ammoUse:1>.
+    check("a free skill has no cost sentence", h.BD.deriveCosts(h.pristine.skills[163]) === null, JSON.stringify(h.BD.deriveCosts(h.pristine.skills[163])));
+    // Hecatomb: <breakRate:3>
+    check("states weapon break risk", /3x/.test(h.BD.deriveDurability(h.pristine.skills[1038])), JSON.stringify(h.BD.deriveDurability(h.pristine.skills[1038])));
+    // Spray and Pray is a gun skill with no breakRate tag. Do not use Moss Flow here - it has <breakRate:2>.
+    check("no break tag means no sentence", h.BD.deriveDurability(h.pristine.skills[258]) === null, JSON.stringify(h.BD.deriveDurability(h.pristine.skills[258])));
+    // Fire Breath: <ApplyState:120> Catatonic, 2-3 turns
+    const catatonic = h.BD.deriveSelfState(h.pristine.skills[147]);
+    check("states a self-applied state with its duration", /Catatonic/i.test(catatonic) && /2-3/.test(catatonic), JSON.stringify(catatonic));
+
+    // 19 skills have a self-state whose bounds are equal. "for 1-1 turns" is not English.
+    check("an equal turn range is not written as a range", / for 1 turn\./.test(h.BD.deriveSelfState(h.pristine.skills[77])), JSON.stringify(h.BD.deriveSelfState(h.pristine.skills[77])));
+    // "Bullet" in "Pistol Bullet" names the ammo, not a damage type. Only lowercase element words are tinted.
+    const bullet = h.BD.colourise("Costs 1 Pistol Bullet.");
+    check("an element word inside an item name is not tinted", bullet.indexOf("Bullet") !== -1 && bullet.indexOf("[4]Bullet") === -1, JSON.stringify(bullet));
+    // A derived element word is lowercased at the source, so it must still be tinted.
+    check("a lowercase element word is still tinted", h.BD.colourise("Deals 60 fire damage.").indexOf("[4]fire") !== -1, JSON.stringify(h.BD.colourise("Deals 60 fire damage.")));
+    // An element on a heal is meaningless. "Restores cold HP" is nonsense.
+    check("a heal states no element", !/cold/.test(h.BD.deriveDamage(h.pristine.items[47])), JSON.stringify(h.BD.deriveDamage(h.pristine.items[47])));
+
+    // "Acid" in "Acid Dart" names the ammo, not the status. Only lowercase status names are tinted.
+    const dart = h.BD.colourise("Costs 1 Acid Dart.");
+    check("a status word inside an item name is not tinted", dart.indexOf("[10]Acid") === -1 && dart.indexOf("[4]Acid") === -1, JSON.stringify(dart));
+    // A derived status name is lowercased at the source, so it must still be tinted.
+    check("a lowercase status name is still tinted", h.BD.colourise("80% chance to inflict poison.").indexOf("[10]poison") !== -1, JSON.stringify(h.BD.colourise("80% chance to inflict poison.")));
+}
+
 group("Mechanical view - states removed and durations");
 {
     const h = loadMod();
