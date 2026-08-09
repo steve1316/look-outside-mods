@@ -1,0 +1,15 @@
+{
+    "name": "BetterDescriptions",
+    "version": "1.0.0",
+    "author": "steve1316",
+    "license": "GPL-3.0",
+    "description": "Gives every item, skill and equipment record a second description built purely from its own data: damage, healing, status odds and durations, costs, resistances and granted skills. The developers' text is never modified - press Tab or Select to switch between the two views.",
+    "parameters": {
+        "toggleKey": "Tab",
+        "toggleButton": 8,
+        "buttonLabel": "Select",
+        "showHint": true,
+        "pageSeconds": 2,
+        "mechanicalFontSize": 18
+    }
+}
