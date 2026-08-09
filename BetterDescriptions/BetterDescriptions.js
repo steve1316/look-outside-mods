@@ -989,4 +989,67 @@ var BetterDescriptions = BetterDescriptions || {};
 
     BetterDescriptions.colourise = colourise;
 
+    // //////////////////////////////////////////////////////////////////////////////////////////////////
+    // //////////////////////////////////////////////////////////////////////////////////////////////////
+    // Apply
+
+    var stats = { covered: 0, bare: 0, skipped: 0 };
+    var skipLog = [];
+    var applied = false;
+
+    // //////////////////////////////////////////////////////////////////////////////////////////////////
+    // //////////////////////////////////////////////////////////////////////////////////////////////////
+    // Curated
+
+    // Facts that live only in the game's scripts, so no deriver can read them off the record. Each stores the
+    // vanilla text it was written against, so a patch that rewords the entry skips it loudly instead of
+    // displaying something untrue. `fact` is one more sentence for the mechanical view, not a whole description.
+    var CURATED = [
+        {
+            kind: "skill",
+            id: 142,
+            expect: "Attempt to craft a Monty Special - needed for\nspecial attacks.",
+            fact: "55% chance to succeed, 9% chance to blow up."
+        },
+        {
+            kind: "armor",
+            id: 67,
+            expect: "There is a scrape in the shape of the letter J inside.\nWill protect the wearer from death once per battle.",
+            fact: "Cheats death 4 times a day on Explorer, 3 on Survival, 2 on Cursed."
+        }
+    ];
+
+    /**
+     * Looks up a hand-written fact for a record, used where the mechanic exists only in game scripts.
+     * Each entry stores the vanilla text it was written against, so a patch that rewords the record skips it loudly.
+     * The caller's own record is judged rather than one re-read from the live database, because `setEnhanced` puts
+     * the mod's mechanical view into `description` once boot finishes, and a later caller must not be told the
+     * developers patched a record the mod itself rewrote.
+     * @param {object} record The database record the fact would be attached to.
+     * @param {string} kind One of `"item"`, `"skill"`, `"armor"` or `"weapon"`.
+     * @param {number} id The record's index in its database.
+     * @returns {string|null} The curated sentence, or null when there is no entry or the vanilla text changed.
+     */
+    function curatedFact(record, kind, id) {
+        for (var i = 0; i < CURATED.length; i++) {
+            var c = CURATED[i];
+            if (c.kind !== kind || c.id !== id) continue;
+            if (record.description !== c.expect) {
+                stats.skipped++;
+                skipLog.push(kind + " " + id + " (" + record.name + "): vanilla text changed, entry skipped");
+                return null;
+            }
+            return c.fact;
+        }
+        return null;
+    }
+
+    /** Prints how many records were covered, how many had nothing derivable, and every curated skip. */
+    function report() {
+        console.log("[BetterDescriptions] covered " + stats.covered + ", bare " + stats.bare + ", skipped " + stats.skipped);
+        for (var i = 0; i < skipLog.length; i++) console.log("  skipped: " + skipLog[i]);
+    }
+
+    BetterDescriptions.report = report;
+
 })();
