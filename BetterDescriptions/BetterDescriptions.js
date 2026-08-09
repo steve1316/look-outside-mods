@@ -579,4 +579,88 @@ var BetterDescriptions = BetterDescriptions || {};
         return stateName(id).replace(STATE_TIERS, "").trim();
     }
 
+    // //////////////////////////////////////////////////////////////////////////////////////////////////
+    // //////////////////////////////////////////////////////////////////////////////////////////////////
+    // Colour
+
+    // Windowskin palette indices, grouped so they can be retuned in one place. This game ships a custom
+    // windowskin, so an index may not look the way the RPG Maker defaults suggest. The devs themselves
+    // use 10 for a status name, in Blood Madness' "\C[10]bleeding\C[0]".
+    var COLOUR_NUMBER = 6;
+    var COLOUR_HP = 24;
+    var COLOUR_STM = 23;
+    var COLOUR_STATUS = 10;
+    var COLOUR_ELEMENT = 4;
+    var colourPattern = null;
+    var statusNameSet = null;
+    var elementNameSet = null;
+
+    /**
+     * Wraps a fragment in a windowskin colour and resets afterwards.
+     * @param {number} index Windowskin palette index.
+     * @param {string} text Fragment to colour.
+     * @returns {string} The fragment surrounded by colour escape codes.
+     */
+    function tint(index, text) {
+        return "\\C[" + index + "]" + text + "\\C[0]";
+    }
+
+    /**
+     * Builds the single alternation used to find every colourable token in one pass, and populates
+     * `statusNameSet` and `elementNameSet` alongside it so `colourise` can tell the two apart.
+     * Both vocabularies come from the database rather than a hand-kept list, so a status or element the
+     * game adds later needs no code change. Names are filtered to plain words so one like "attack+25%"
+     * cannot disturb the pattern, and sorted longest first so a multi-word name wins over one of its parts.
+     * @returns {RegExp} Pattern matching a status or element word, an HP/STM unit, or a number.
+     */
+    function buildColourPattern() {
+        var states = [];
+        var elements = [];
+        var plain = /^[a-z][a-z ]*$/;
+        var i;
+        if (typeof $dataStates !== "undefined") {
+            for (i = 0; i < $dataStates.length; i++) {
+                var name = $dataStates[i] ? stateFamily(i) : "";
+                if (plain.test(name) && states.indexOf(name) === -1) states.push(name);
+            }
+        }
+        if (typeof $dataSystem !== "undefined" && $dataSystem.elements) {
+            for (i = 0; i < $dataSystem.elements.length; i++) {
+                var element = elementName(i);
+                if (plain.test(element) && elements.indexOf(element) === -1) elements.push(element);
+            }
+        }
+        statusNameSet = {};
+        elementNameSet = {};
+        for (i = 0; i < states.length; i++) statusNameSet[states[i]] = true;
+        for (i = 0; i < elements.length; i++) elementNameSet[elements[i]] = true;
+        var words = states.concat(elements).sort(function(a, b) { return b.length - a.length; });
+        var alt = words.map(escapeForRegex).join("|");
+        return new RegExp("\\b(" + alt + ")\\b|\\b(HP|STM)\\b|(\\d+%?)", "gi");
+    }
+
+    /**
+     * Colours the mechanical text this mod generated, in a single pass so an emitted escape code is
+     * never rescanned. Call it only on derived text, never on anything the developers wrote.
+     * Both element words and status names are only tinted when they appear lowercase, since `deriveDamage`,
+     * `deriveSkill` and `stateName` all lowercase these words at the source. A capitalised match (e.g.
+     * "Bullet" inside an item name like "Pistol Bullet", or "Acid" inside "Acid Dart") names something
+     * else entirely and is left untinted.
+     * @param {string} clause A derived clause. Never the developers' own prose.
+     * @returns {string} The clause with numbers, HP and STM, status names and element words tinted.
+     */
+    function colourise(clause) {
+        if (!colourPattern) colourPattern = buildColourPattern();
+        colourPattern.lastIndex = 0;
+        return String(clause).replace(colourPattern, function(match, word, unit, number) {
+            if (number) return tint(COLOUR_NUMBER, number);
+            if (unit) return tint(unit.toUpperCase() === "HP" ? COLOUR_HP : COLOUR_STM, unit);
+            if (elementNameSet[match]) return tint(COLOUR_ELEMENT, match);
+            if (statusNameSet[match]) return tint(COLOUR_STATUS, match);
+            return match;
+        });
+    }
+
+    BetterDescriptions.colourise = colourise;
+
 })();
